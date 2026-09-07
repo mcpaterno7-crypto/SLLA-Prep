@@ -84,6 +84,7 @@
   }
   .cat-row:hover{ border-color:var(--brass); }
   .cat-row .count{ color:var(--ink-soft); font-size:12.5px; }
+  .cat-row-selectable input[type=checkbox]{ margin-right:8px; }
 
   .field-row{ display:flex; gap:10px; align-items:center; margin:14px 0;
     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,sans-serif; font-size:14px;}
@@ -147,6 +148,9 @@
   .explain.show{ display:block; }
   .tip-line{ margin-top:10px; padding-top:10px; border-top:1px dashed var(--line); color:var(--brass-deep); }
   .tip-line strong{ color:var(--ink); }
+  .tip-reasons{ margin:6px 0 0; padding-left:20px; }
+  .tip-reasons li{ margin-bottom:4px; color:var(--ink-soft); }
+  .tip-reasons li strong{ color:var(--ink); }
 
   .nav-row{ display:flex; justify-content:space-between; margin-top:20px; }
 
@@ -1633,32 +1637,163 @@ function formatTime(sec){
 }
 
 // ---------------- TEST-TAKING TIP CLASSIFIER ----------------
-// Original signal-word tips for reading SLLA-style answer choices — not sourced from any
-// specific prep book. Each correct answer is checked against these patterns in priority
-// order; the first match determines the tip shown alongside the standard explanation.
-const TIP_RULES = [
-  { test: /\b(collaborat|engage|involve|invite|team|facilitat|co-plan|co-creat|input from|stakeholder|partner)/i,
-    tip: "Notice the collaborative language here (engaging staff, families, or students). On SLLA items, an answer that brings people into the process usually beats one where the leader acts alone." },
-  { test: /\b(review|analyz|examine|data|evidence|disaggregat|assess)/i,
-    tip: "This answer starts by looking at data or evidence before acting. SLLA tends to reward diagnosing a problem before prescribing a fix." },
-  { test: /\b(equit|access|barrier|gap|underrepresent|disproportionate|marginaliz)/i,
-    tip: "When equity is part of the scenario, the strongest answer usually names and directly addresses the specific gap or barrier, rather than a general fix." },
-  { test: /\b(policy|process|system|structure|practice|procedure)\b/i,
-    tip: "This answer fixes the underlying system or process, not just the one incident in front of the leader — a common marker of the stronger choice." },
-  { test: /\b(proactiv|ongoing|regular|before|prevent|schedule|sustain)/i,
-    tip: "This answer builds something proactive or ongoing rather than reacting once — often a sign it's the stronger choice." },
-  { test: /\b(communicat|explain|transparent|rationale|inform|share|disseminat)/i,
-    tip: "This answer keeps people informed and explains the reasoning. Transparency tends to beat quietly acting without explanation." },
-  { test: /\b(train|coach|mentor|model|capacity|develop)/i,
-    tip: "This answer builds someone's skill or capacity rather than just directing or correcting them — SLLA usually favors capacity-building over top-down control." }
+// Compares all 4 options against each other (not just the correct one) across several
+// dimensions common in SLLA-style items. Each distractor is analyzed independently, and its
+// reason quotes the actual trigger phrase from its own text — so the explanation is visibly
+// grounded in what that specific option says, not a canned line reused across options. When
+// two distractors share the same underlying flaw, the classifier tries to give each one a
+// different applicable dimension so the reasons don't read as duplicates. A dimension is only
+// used when the correct answer does NOT show the flaw. Original analysis — not sourced from
+// any specific prep book.
+const TIP_DIMENSIONS = [
+  { good: /\b(collaborat|engage|involve|invite input|facilitat|co-plan|co-creat|stakeholder|partner with|input from)/i,
+    bad: /\b(alone|without (staff|family|families|further discussion|input|community)|personal judgment|quietly|the principal (alone|personally decides))/i,
+    goodTip: 'brings others into the process rather than acting alone — notice "{match}"',
+    badTip: 'acts alone or without real input from others — notice "{match}"' },
+  { good: /\b(review (the )?data|analy[sz]|examine (the )?data|disaggregat|evidence|documented (need|evidence|data|criteria)|based on data)/i,
+    bad: /\b(assume|personal preference|without review|based on (which|who) (asks|requests)|frequently request|convenience)/i,
+    goodTip: 'grounds the decision in documented data or evidence — notice "{match}"',
+    badTip: 'leans on assumption or convenience instead of evidence — notice "{match}"' },
+  { good: /\b(policy|process|system\b|structure|practice|procedure|schoolwide|ongoing review)/i,
+    bad: /\b(case-by-case|informally|ad hoc|whichever (classroom|teacher|group)|one-time)/i,
+    goodTip: 'fixes the underlying process or policy rather than handling it informally — notice "{match}"',
+    badTip: 'handles it informally rather than through a consistent process — notice "{match}"' },
+  { good: /\b(proactiv|ongoing|regularly|before (it|a|an)|prevent|establish.*advance|scheduled review)/i,
+    bad: /\b(wait (until|to see)|delay|only if|only when|only during|only for|until (a|an|the)|ignore|avoid addressing|only after|when (a )?concerns? (is|are) raised|arises?)\b/i,
+    goodTip: 'takes proactive, ongoing action rather than waiting for a problem to surface — notice "{match}"',
+    badTip: 'waits or only reacts once a problem has surfaced — notice "{match}"' },
+  { good: null,
+    bad: /\b(exclusively|solely|entirely|altogether|automatically|immediately (remove|deny|terminate|discipline)|regardless of|all at once|simultaneously|require (all|every)|outright)/i,
+    goodTip: "takes a measured, proportionate approach rather than swinging to an extreme",
+    badTip: 'swings to an all-or-nothing extreme — notice "{match}"' },
+  { good: null,
+    bad: /\b(approval for every|every decision|micromanag|minimal (oversight|support|involvement|guidance))/i,
+    goodTip: "balances clear expectations with appropriate autonomy, avoiding both too much control and too little oversight",
+    badTip: 'swings to the opposite extreme of too much control or too little oversight — notice "{match}"' },
+  { good: /\b(same process|regardless of (the|their)|consisten(t(ly)?|cy)|equitable|applied to all|documented criteria|standard (process|procedure))/i,
+    bad: /\b(favorit|familiar|already knows?|request(s|ed)? it first|loudest|based on (personal|who))/i,
+    goodTip: 'applies a consistent standard to everyone rather than favoring convenience or familiarity — notice "{match}"',
+    badTip: 'lets favoritism, familiarity, or convenience drive the decision — notice "{match}"' },
+  { good: /\b(communicat|explain|transparen(t|cy)|inform (families|staff|the)|share (the )?rationale|disseminat)/i,
+    bad: /\b(quietly|without (explanation|informing)|privately handle|avoid (explaining|discussing))/i,
+    goodTip: 'keeps people informed and explains the reasoning rather than acting quietly — notice "{match}"',
+    badTip: 'handles it quietly rather than explaining the reasoning to those affected — notice "{match}"' },
+  { good: /\b(regularly|ongoing|comprehensive|throughout|all aspects|consistently|routinely|multiple (channels|sources|formats))/i,
+    bad: /\b(single|one-time|isolated|standalone|once (a|per) year|annual (event|assembly)|a single)\b/i,
+    goodTip: 'builds an ongoing, comprehensive practice rather than relying on one isolated event — notice "{match}"',
+    badTip: 'relies on a single, one-time event rather than an ongoing practice — notice "{match}"' },
+  { good: /\b(directly (review|engage|survey|assess)|engage (a )?(broad|diverse|wide) (range|cross-section)|proactively (identify|invite))/i,
+    bad: /\brely (solely |entirely )?on (the |a )?[a-zA-Z'\s]{0,35}(board|committee|group|representative|office|department)s? to (handle|manage|represent|speak for)/i,
+    goodTip: 'directly engages a broad range of people rather than delegating representation — notice "{match}"',
+    badTip: 'delegates representation to a single group instead of engaging broadly — notice "{match}"' },
+  { good: /\b(re-?engage|revis(e|ing)|adjust|adapt|update the (plan|timeline|approach))/i,
+    bad: /\benforc(e|ing) compliance|mandate compliance|assign .{0,20}to enforce|require compliance/i,
+    goodTip: 'adapts and re-engages people with the plan rather than simply enforcing compliance with it as-is — notice "{match}"',
+    badTip: 'tries to enforce the existing approach rather than adapting it — notice "{match}"' },
+  { good: null,
+    bad: /\b(vote on whether|whether to abandon|leave (it|the decision) (up )?to|let (staff|teachers) decide alone)/i,
+    goodTip: "keeps the leader actively driving a clear next step rather than deferring the core decision entirely",
+    badTip: 'defers the real decision to an open vote instead of the leader driving it — notice "{match}"' }
 ];
-const TIP_FALLBACK = "Compare what each option actually does, not just how reasonable it sounds. Extreme words in the other choices — 'immediately,' 'always,' 'without further,' 'only' — often signal a distractor that skips a necessary step.";
+const TIP_FALLBACK_CORRECT_TEMPLATE = (text) => {
+  const shortText = text.length > 60 ? text.slice(0,57) + '...' : text;
+  return `most directly and completely resolves what the scenario is asking — "${shortText}" addresses it without cutting corners or leaving a step out`;
+};
 
-function getAnswerTip(correctText){
-  for(const rule of TIP_RULES){
-    if(rule.test.test(correctText)) return rule.tip;
+function fallbackDistractorReason(optionText, correctText){
+  const shortOpt = optionText.length > 55 ? optionText.slice(0,52) + '...' : optionText;
+  return `takes a narrower or less complete approach than the correct answer — "${shortOpt}" doesn't fully resolve what the scenario is asking`;
+}
+
+function trimPhrase(phrase){
+  if(phrase.length <= 40) return phrase;
+  return phrase.slice(0, 37) + '...';
+}
+
+// Finds a "bad" pattern match while ignoring matches that are actually negated (e.g. "not only
+// during high-stakes moments" should NOT count as showing the "only during..." flaw — the "not"
+// flips it into a positive). Returns the regex match object, or null if no real (non-negated)
+// match exists.
+function findRealBadMatch(regex, text){
+  const re = new RegExp(regex.source, regex.flags.includes('g') ? regex.flags : regex.flags + 'g');
+  let m;
+  while((m = re.exec(text)) !== null){
+    const preceding = text.slice(Math.max(0, m.index - 16), m.index).toLowerCase();
+    if(!/\bnot\s+(just\s+|simply\s+|only\s+|merely\s+)?$/.test(preceding)) return m;
+    if(m.index === re.lastIndex) re.lastIndex++; // avoid infinite loop on zero-length match
   }
-  return TIP_FALLBACK;
+  return null;
+}
+function testReal(regex, text){ return !!findRealBadMatch(regex, text); }
+
+function analyzeAnswerChoices(q){
+  const opts = q.o;
+  const correctIdx = q.c;
+  const correctText = opts[correctIdx];
+
+  // Pick the dimension that best explains why the CORRECT answer stands out. Critically, if the
+  // dimension defines a "good" pattern, the correct answer's own text must actually match it —
+  // otherwise the claim wouldn't be grounded in what that answer actually says.
+  let bestForCorrect = null;
+  TIP_DIMENSIONS.forEach(dim => {
+    if(testReal(dim.bad, correctText)) return;
+    if(dim.good && !dim.good.test(correctText)) return; // require real textual grounding
+    let badCount = 0;
+    opts.forEach((o,i)=>{ if(i!==correctIdx && testReal(dim.bad, o)) badCount++; });
+    if(badCount === 0) return; // doesn't discriminate this question
+    if(!bestForCorrect || badCount > bestForCorrect.score) bestForCorrect = { dim, score: badCount };
+  });
+
+  let correctTip;
+  if(bestForCorrect){
+    const dim = bestForCorrect.dim;
+    if(dim.good){
+      const m = dim.good.exec(correctText);
+      const phrase = m ? trimPhrase(m[0]) : '';
+      correctTip = dim.goodTip.includes('{match}') ? dim.goodTip.replace('{match}', phrase) : dim.goodTip;
+    } else {
+      correctTip = dim.goodTip;
+    }
+  } else {
+    correctTip = TIP_FALLBACK_CORRECT_TEMPLATE(correctText);
+  }
+
+  // Analyze each distractor independently, preferring a dimension not already claimed by an
+  // earlier distractor in this same question so the reasons stay distinct from each other.
+  const usedDims = new Set();
+  const reasons = [];
+  opts.forEach((o,i) => {
+    if(i === correctIdx) return;
+    const candidates = TIP_DIMENSIONS.filter(dim => testReal(dim.bad, o) && !testReal(dim.bad, correctText));
+    const chosen = candidates.find(d => !usedDims.has(d)) || candidates[0];
+    let reason;
+    if(chosen){
+      usedDims.add(chosen);
+      const m = findRealBadMatch(chosen.bad, o);
+      const phrase = m ? trimPhrase(m[0]) : '';
+      reason = chosen.badTip.replace('{match}', phrase);
+    } else {
+      reason = fallbackDistractorReason(o, correctText);
+    }
+    reasons.push({ i, reason });
+  });
+  return { correctTip, reasons };
+}
+
+function renderTipHTML(q){
+  const letters = ['A','B','C','D'];
+  const { correctTip, reasons } = analyzeAnswerChoices(q);
+  return `
+    <div class="tip-line">
+      <strong>Why ${letters[q.c]} is the strongest answer:</strong> it ${correctTip}.
+    </div>
+    <div class="tip-line">
+      <strong>Why the others aren't the best choice:</strong>
+      <ul class="tip-reasons">
+        ${reasons.map(r => `<li><strong>${letters[r.i]})</strong> ${r.reason}.</li>`).join('')}
+      </ul>
+    </div>
+  `;
 }
 
 // ---------------- MOCK EXAM PROGRESS (persisted) ----------------
@@ -1743,8 +1878,22 @@ async function loadHistory(){
   if(!raw) return [];
   try{
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map(normalizeHistoryEntry) : [];
   } catch(e){ return []; }
+}
+
+// Older history entries (saved before multi-category practice existed) used a single
+// "catKey" field with no per-category breakdown. Normalize those to the current shape
+// (catKeys array + byCat breakdown) so old and new entries render identically.
+function normalizeHistoryEntry(e){
+  if(e.type === 'category' && !e.catKeys){
+    e.catKeys = e.catKey ? [e.catKey] : [];
+    if(!e.byCat){
+      e.byCat = {};
+      if(e.catKey) e.byCat[e.catKey] = { correct: e.correct, total: e.total };
+    }
+  }
+  return e;
 }
 
 async function saveHistoryList(list){
@@ -1848,7 +1997,7 @@ async function renderHome(){
       <div class="mode-card" onclick="showCatPicker()">
         <div class="tab-index">02 · Targeted drill</div>
         <h2>Category Practice</h2>
-        <p>Pick one PSEL-aligned category and choose any number of questions from 1 to 50.</p>
+        <p>Pick one or more PSEL-aligned categories and choose how many questions to answer &mdash; drill a single area or build a mixed mini-exam.</p>
       </div>
       <div class="mode-card" onclick="showCRPicker()">
         <div class="tab-index">03 · Written response</div>
@@ -1926,49 +2075,60 @@ async function discardMockProgress(){
 }
 
 // ---------------- CATEGORY PICKER ----------------
+function categoryLabel(catKeys){
+  if(!catKeys || catKeys.length === 0) return 'Category Practice';
+  if(catKeys.length <= 2) return catKeys.map(k=>CATEGORIES[k].name).join(', ');
+  return `${catKeys.length} categories (${catKeys.map(k=>CATEGORIES[k].name.split(' ')[0]).join(', ')})`;
+}
+
 function showCatPicker(){
-  state = { screen:'cat-picker' };
+  state = { screen:'cat-picker', selectedCats: [], desiredCount: 10 };
   render();
 }
+function toggleCatSelection(k){
+  const input = document.getElementById('qcount');
+  if(input && input.value) state.desiredCount = parseInt(input.value,10) || state.desiredCount;
+  const idx = state.selectedCats.indexOf(k);
+  if(idx === -1) state.selectedCats.push(k); else state.selectedCats.splice(idx,1);
+  renderCatPicker();
+}
 function renderCatPicker(){
+  const selected = state.selectedCats || [];
+  const totalAvailable = QUESTIONS.filter(q=>selected.includes(q.cat)).length;
+  const defaultCount = Math.max(1, Math.min(state.desiredCount || 10, totalAvailable || 1));
   app.innerHTML = `
     <span class="back-link" onclick="goHome()">&larr; Back</span>
-    <div class="section-title">Choose a category</div>
+    <div class="section-title">Choose one or more categories</div>
+    <p class="self-check-hint">Select any combination of categories to build a mixed practice set &mdash; pick just one for focused drilling, or several for a mini-exam spanning multiple leadership areas.</p>
     <div class="cat-grid">
       ${Object.keys(CATEGORIES).map(k => `
-        <div class="cat-row" onclick="pickCategory('${k}')">
-          <span>${CATEGORIES[k].name}</span>
+        <label class="cat-row cat-row-selectable">
+          <span><input type="checkbox" ${selected.includes(k)?'checked':''} onchange="toggleCatSelection('${k}')"> ${CATEGORIES[k].name}</span>
           <span class="count">${QUESTIONS.filter(q=>q.cat===k).length} available</span>
-        </div>
+        </label>
       `).join('')}
     </div>
+    ${selected.length > 0 ? `
+      <p class="self-check-hint" style="margin-top:14px;">${totalAvailable} questions available across ${selected.length} selected categor${selected.length===1?'y':'ies'}.</p>
+      <div class="field-row">
+        <label for="qcount">Number of questions:</label>
+        <input type="number" id="qcount" min="1" max="${totalAvailable}" value="${defaultCount}" style="width:70px;">
+        <span style="color:var(--ink-soft);font-size:13px;">of ${totalAvailable}</span>
+      </div>
+      <button class="btn" onclick="startCategoryQuiz()">Begin practice</button>
+    ` : `<p class="self-check-hint" style="margin-top:14px;">Select at least one category to continue.</p>`}
   `;
 }
-function pickCategory(catKey){
-  const total = QUESTIONS.filter(q=>q.cat===catKey).length;
-  state = { screen:'cat-picker', chosenCat: catKey, chosenTotal: total, chosenCount: Math.min(10,total) };
-  app.innerHTML = `
-    <span class="back-link" onclick="showCatPicker()">&larr; Back</span>
-    <div class="section-title">${CATEGORIES[catKey].name}</div>
-    <p class="ui" style="font-size:14px;color:var(--ink-soft);max-width:520px;">
-      ${total} practice questions are available in this category. Choose how many you'd like to answer.
-    </p>
-    <div class="field-row">
-      <label for="qcount">Number of questions:</label>
-      <input type="number" id="qcount" min="1" max="${total}" value="${Math.min(10,total)}" style="width:70px;">
-      <span style="color:var(--ink-soft);font-size:13px;">of ${total}</span>
-    </div>
-    <button class="btn" onclick="startCategoryQuiz('${catKey}')">Begin practice</button>
-  `;
-}
-function startCategoryQuiz(catKey){
+async function startCategoryQuiz(){
+  const selected = state.selectedCats || [];
+  if(selected.length === 0) return;
   const input = document.getElementById('qcount');
+  const pool = shuffle(QUESTIONS.filter(q=>selected.includes(q.cat)));
   let n = parseInt(input.value, 10);
-  const catQs = shuffle(QUESTIONS.filter(q=>q.cat===catKey));
   if(isNaN(n) || n < 1) n = 1;
-  if(n > catQs.length) n = catQs.length;
-  const items = catQs.slice(0, n);
-  state = { screen:'quiz', mode:'category', catKey, items, idx:0, answers:[], selected:null, locked:false };
+  if(n > pool.length) n = pool.length;
+  const items = pool.slice(0, n);
+  state = { screen:'quiz', mode:'category', catKeys: selected.slice(), items, idx:0, answers:[], selected:null, locked:false };
   render();
 }
 
@@ -1980,7 +2140,7 @@ function renderQuiz(){
   app.innerHTML = `
     <span class="back-link" onclick="confirmExit()">&larr; Exit</span>
     <div class="progress-line">
-      <span>${state.mode === 'mock' ? 'Full Mock Exam' : CATEGORIES[state.catKey].name}</span>
+      <span>${state.mode === 'mock' ? 'Full Mock Exam' : categoryLabel(state.catKeys)}</span>
       <span>Item ${state.idx+1} of ${state.items.length}</span>
     </div>
     <div class="progress-bar"><div class="fill" style="width:${pct}%"></div></div>
@@ -1996,7 +2156,7 @@ function renderQuiz(){
       `).join('')}
       <div class="explain ${state.locked?'show':''}">
         <strong>${state.selected===q.c ? 'Correct.' : 'Not quite.'}</strong> ${q.e}
-        <div class="tip-line"><strong>Test-taking tip:</strong> ${getAnswerTip(q.o[q.c])}</div>
+        ${renderTipHTML(q)}
       </div>
     </div>
     <div class="nav-row">
@@ -2028,13 +2188,21 @@ async function nextItem(){
       return;
     }
     // Category practice run complete — record it to history before showing results.
+    const catByCat = {};
+    state.answers.forEach(a=>{
+      const c = a.q.cat;
+      catByCat[c] = catByCat[c] || {correct:0,total:0};
+      catByCat[c].total++;
+      if(a.correct) catByCat[c].correct++;
+    });
     await recordHistoryEntry({
       id: Date.now() + '-' + Math.random().toString(36).slice(2,7),
       type: 'category',
-      catKey: state.catKey,
+      catKeys: state.catKeys,
       date: Date.now(),
       correct: state.answers.filter(a=>a.correct).length,
       total: state.answers.length,
+      byCat: catByCat,
       incorrect: buildIncorrectList(state.answers)
     });
     state.screen = 'results';
@@ -2208,7 +2376,7 @@ function renderResults(){
     <span class="back-link" onclick="goHome()">&larr; Back to home</span>
     <div class="results-card">
       <div class="ui" style="font-size:13px;color:var(--ink-soft);">
-        ${state.mode==='mock' ? 'Full Mock Exam — Section I (Selected Response)' : CATEGORIES[state.catKey].name} &middot; ${total} questions
+        ${state.mode==='mock' ? 'Full Mock Exam — Section I (Selected Response)' : categoryLabel(state.catKeys)} &middot; ${total} questions
       </div>
       <div class="score-big">${correct}/${total}</div>
       <div class="ui" style="color:var(--ink-soft);font-size:14px;">${pct}% correct</div>
@@ -2820,6 +2988,8 @@ async function renderHistory(){
 
   function attemptRow(a, label){
     const pct = Math.round((a.correct/a.total)*100);
+    const catKeysList = Object.keys(a.byCat || {});
+    const showBreakdown = catKeysList.length > 1;
     return `
       <div class="history-row">
         <div class="history-row-main">
@@ -2832,6 +3002,16 @@ async function renderHistory(){
             : `<span class="toolbar-note">All correct!</span>`}
         </div>
         <div class="history-bar-track"><div class="history-bar-fill" style="width:${pct}%;"></div></div>
+        ${showBreakdown ? `
+          <div class="results-breakdown" style="margin-top:10px;">
+            ${catKeysList.map(k=>`
+              <div class="rb-row" style="font-size:12.5px;">
+                <span>${CATEGORIES[k] ? CATEGORIES[k].name : k}</span>
+                <span>${a.byCat[k].correct}/${a.byCat[k].total}</span>
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
       </div>
     `;
   }
@@ -2847,16 +3027,10 @@ async function renderHistory(){
     `}
 
     <div class="section-title">Category Practice attempts</div>
-    ${Object.keys(CATEGORIES).map(k=>{
-      const attempts = catAttempts.filter(a=>a.catKey===k);
-      if(attempts.length === 0) return '';
-      return `
-        <div class="history-cat-group">
-          <div class="model-action-title">${CATEGORIES[k].name}</div>
-          ${attempts.map(a => attemptRow(a, CATEGORIES[k].name)).join('')}
-        </div>
-      `;
-    }).join('') || `<p class="self-check-hint">No category practice attempts recorded yet.</p>`}
+    <p class="self-check-hint">Includes both single-category drills and mixed multi-category mini-exams &mdash; each attempt shows a per-category breakdown when more than one category was included.</p>
+    ${catAttempts.length === 0
+      ? `<p class="self-check-hint">No category practice attempts recorded yet.</p>`
+      : catAttempts.map(a => attemptRow(a, categoryLabel(a.catKeys))).join('')}
 
     ${history.length > 0 ? `
       <div style="margin-top:20px;">
@@ -2884,7 +3058,7 @@ async function renderHistoryDetail(){
     return;
   }
   const pct = Math.round((entry.correct/entry.total)*100);
-  const label = entry.type === 'mock' ? 'Full Mock Exam' : CATEGORIES[entry.catKey].name;
+  const label = entry.type === 'mock' ? 'Full Mock Exam' : categoryLabel(entry.catKeys);
   const letters = ['A','B','C','D'];
 
   app.innerHTML = `
@@ -2906,7 +3080,7 @@ async function renderHistoryDetail(){
           `).join('')}
           <div class="explain show">
             ${q.e}
-            <div class="tip-line"><strong>Test-taking tip:</strong> ${getAnswerTip(q.o[q.c])}</div>
+            ${renderTipHTML(q)}
           </div>
         </div>
       `;
