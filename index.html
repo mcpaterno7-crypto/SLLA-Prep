@@ -349,6 +349,18 @@ const CATEGORIES = {
   LC: { name: "Legal & Compliance (bonus)", bonus: true }
 };
 
+// Audio study guides: short spoken-lecture overviews of each PSEL leadership category, grounded
+// in the official ETS SLLA 6990 content specification. Files live alongside index.html in the
+// deployed folder. A category with file:null simply hasn't had its audio produced yet.
+const AUDIO_GUIDES = {
+  SL: { file: "audio/strategic-leadership.m4a", label: "Strategic Leadership" },
+  IL: { file: null, label: "Instructional Leadership" },
+  CC: { file: null, label: "Climate & Culture Leadership" },
+  EL: { file: null, label: "Ethical Leadership" },
+  OL: { file: null, label: "Organizational Leadership" },
+  CE: { file: null, label: "Community Engagement Leadership" }
+};
+
 const QUESTIONS = [
 // ---------------- STRATEGIC LEADERSHIP (SL) ----------------
 {cat:"SL", q:"Three years of declining state math scores prompt a principal to convene grade-level teams. All four are reasonable starting moves — which best reflects PSEL 1's use of data to shape vision and goals?",
@@ -2573,6 +2585,7 @@ function render(){
     else if(state.screen === 'cr-write') result = renderCRWrite();
     else if(state.screen === 'history') result = renderHistory();
     else if(state.screen === 'history-detail') result = renderHistoryDetail();
+    else if(state.screen === 'audio-guides') result = renderAudioGuides();
 
     if(result && typeof result.catch === 'function'){
       result.catch(showFatalError);
@@ -2641,6 +2654,11 @@ async function renderHome(){
         <h2>Constructed Response</h2>
         <p>Practice any of ${CR_SCENARIOS.length} scenario-based items untimed, with a rubric, self-check, and model answer &mdash; works fully offline.</p>
       </div>
+      <div class="mode-card" onclick="showAudioGuides()">
+        <div class="tab-index">04 · Listen &amp; learn</div>
+        <h2>Audio Study Guides</h2>
+        <p>Short spoken overviews of each PSEL leadership category, grounded in the official ETS content specification &mdash; good for review on the go.</p>
+      </div>
     </div>
     <div class="section-title">Progress</div>
     <div class="cat-row" style="cursor:pointer;" onclick="showHistory()">
@@ -2662,6 +2680,47 @@ async function renderHome(){
 function showHistory(){
   state = { screen:'history' };
   render();
+}
+
+// ---------------- AUDIO STUDY GUIDES ----------------
+function showAudioGuides(){
+  state = { screen:'audio-guides' };
+  render();
+}
+
+function renderAudioGuides(){
+  const cards = Object.keys(AUDIO_GUIDES).map(k => {
+    const guide = AUDIO_GUIDES[k];
+    const qCount = QUESTIONS.filter(q=>q.cat===k).length;
+    if(guide.file){
+      return `
+        <div class="cat-row" style="flex-direction:column; align-items:stretch; gap:10px; cursor:default;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline;">
+            <strong>${guide.label}</strong>
+            <span class="count">${qCount} practice questions</span>
+          </div>
+          <audio controls preload="none" style="width:100%;" src="${guide.file}">
+            Your browser doesn't support inline audio. You can still open ${guide.file} directly.
+          </audio>
+        </div>`;
+    }
+    return `
+      <div class="cat-row" style="cursor:default; opacity:0.6;">
+        <span>${guide.label}</span>
+        <span class="count">coming soon</span>
+      </div>`;
+  }).join('');
+
+  app.innerHTML = `
+    <div class="section-title">Audio Study Guides</div>
+    <p style="color:var(--muted, #666); margin:-4px 0 16px;">Short spoken overviews of each PSEL leadership category, grounded in the official ETS SLLA content specification. Good for review during a commute or workout &mdash; not a replacement for practicing questions.</p>
+    <div class="cat-grid">
+      ${cards}
+    </div>
+    <div class="nav-row" style="margin-top:20px;">
+      <button class="btn secondary" onclick="state={screen:'home'};render();">Back to home</button>
+    </div>
+  `;
 }
 
 // ---------------- MOCK EXAM SETUP / RESUME ----------------
