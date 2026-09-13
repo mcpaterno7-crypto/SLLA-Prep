@@ -214,6 +214,7 @@
   .cr-timer-controls{ display:flex; align-items:center; gap:14px; }
   .cr-timer-display{ font-size:20px; font-weight:600; font-variant-numeric:tabular-nums; letter-spacing:0.5px; }
   .cr-timer-display.time-low{ color:#E08A7D; }
+  .cr-timer-display.time-over{ color:#C0392B; font-weight:700; }
   .cr-timer-bar .toolbar-note{ color:rgba(255,255,255,0.7); }
   .cr-timer-bar button.secondary{ color:#fff; border-color:rgba(255,255,255,0.5); }
   .cr-timer-bar button.secondary:hover{ background:rgba(255,255,255,0.12); color:#fff; }
@@ -2255,6 +2256,8 @@ const app = document.getElementById('app');
 let state = { screen: 'home' };
 let crTimerHandle = null;
 const CR_SECTION_SECONDS = 75 * 60;
+let practiceCRTimerHandle = null;
+const PRACTICE_CR_SECONDS = 18 * 60; // optional per-item timer for standalone CR practice
 
 // Give every question a stable index so saved progress can reference questions by id.
 QUESTIONS.forEach((q,i)=>{ q._idx = i; });
@@ -2614,7 +2617,7 @@ function showFatalError(err){
   }
 }
 
-function goHome(){ clearCRTimerHandle(); state = { screen: 'home' }; render(); }
+function goHome(){ clearCRTimerHandle(); clearPracticeTimerHandle(); state = { screen: 'home' }; render(); }
 
 // ---------------- HOME ----------------
 async function renderHome(){
@@ -3226,6 +3229,7 @@ function updateReadinessResult(mcCorrect){
 
 // ---------------- CONSTRUCTED RESPONSE: PICKER ----------------
 function showCRPicker(){
+  clearPracticeTimerHandle();
   state = { screen:'cr-picker' };
   render();
 }
@@ -3246,8 +3250,73 @@ function renderCRPicker(){
 function openCR(id){
   const scenario = CR_SCENARIOS.find(s=>s.id===id);
   state = { screen:'cr-write', scenario, response:'', checks: SELF_CHECK_ITEMS.map(()=>false), showModel:false,
-            grading:false, result:null, error:null, aiMenuOpen:false, exportNote:'', crTab:'scenario' };
+            grading:false, result:null, error:null, aiMenuOpen:false, exportNote:'', crTab:'scenario',
+            timerEnabled:false, timeRemaining: PRACTICE_CR_SECONDS, timerRunning:false, timeExpiredNote:'', timeUpNotified:false };
   render();
+}
+
+// ---------------- STANDALONE CR PRACTICE: OPTIONAL 18-MINUTE TIMER ----------------
+function formatPracticeTime(sec){
+  const neg = sec < 0;
+  const abs = Math.abs(sec);
+  const m = Math.floor(abs/60);
+  const s = abs%60;
+  return (neg?'-':'') + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+}
+function clearPracticeTimerHandle(){
+  if(practiceCRTimerHandle){ clearInterval(practiceCRTimerHandle); practiceCRTimerHandle = null; }
+}
+function startPracticeTimer(){
+  state.timerRunning = true;
+  clearPracticeTimerHandle();
+  practiceCRTimerHandle = setInterval(()=>{
+    // Deliberately no floor at zero: once the 18 minutes run out, the timer keeps counting
+    // into negative time so the writer can see exactly how far over pace they ran, which is
+    // more useful for building consistency than just being cut off.
+    state.timeRemaining = (state.timeRemaining||0) - 1;
+    updatePracticeTimerDisplay();
+    if(state.timeRemaining === 0 && !state.timeUpNotified){
+      state.timeUpNotified = true;
+      state.timeExpiredNote = "That's 18 minutes \u2014 about the real per-item pace on exam day. Keep writing if you're not done; the timer will now count upward past zero so you can see exactly how far over you ran.";
+      renderCRWrite();
+    }
+  }, 1000);
+}
+function pausePracticeTimer(){
+  clearPracticeTimerHandle();
+  state.timerRunning = false;
+}
+function togglePracticeTimer(){
+  // Checkbox toggle: turning the timer ON for this scenario starts it fresh at 18:00.
+  // Turning it OFF stops and hides it, without discarding what's been written.
+  state.timerEnabled = !state.timerEnabled;
+  if(state.timerEnabled){
+    state.timeRemaining = PRACTICE_CR_SECONDS;
+    state.timeExpiredNote = '';
+    state.timeUpNotified = false;
+    startPracticeTimer();
+  } else {
+    pausePracticeTimer();
+  }
+  renderCRWrite();
+}
+function togglePracticeTimerRun(){
+  if(state.timerRunning) pausePracticeTimer(); else startPracticeTimer();
+  renderCRWrite();
+}
+function resetPracticeTimer(){
+  pausePracticeTimer();
+  state.timeRemaining = PRACTICE_CR_SECONDS;
+  state.timeExpiredNote = '';
+  state.timeUpNotified = false;
+  startPracticeTimer();
+}
+function updatePracticeTimerDisplay(){
+  const el = document.getElementById('practiceTimerDisplay');
+  if(!el) return;
+  el.textContent = formatPracticeTime(state.timeRemaining);
+  el.classList.toggle('time-over', state.timeRemaining < 0);
+  el.classList.toggle('time-low', state.timeRemaining >= 0 && state.timeRemaining <= 180);
 }
 
 // ---------------- EXPORT / GRADE-ELSEWHERE HELPERS ----------------
@@ -3448,8 +3517,28 @@ function renderCRWrite(){
     </div>
   `;
 
+  const timerBarHTML = state.timerEnabled ? `
+    <div class="cr-timer-bar">
+      <div>
+        <strong>Practice timer</strong>
+        <div class="toolbar-note" style="margin:2px 0 0;">75-minute constructed-response section &divide; 4 items &asymp; 18&ndash;19 minutes each &mdash; this timer uses 18 as a slightly-tight practice target</div>
+      </div>
+      <div class="cr-timer-controls">
+        <span id="practiceTimerDisplay" class="cr-timer-display ${state.timeRemaining<0?'time-over':(state.timeRemaining<=180?'time-low':'')}">${formatPracticeTime(state.timeRemaining)}</span>
+        <button class="btn small secondary" onclick="togglePracticeTimerRun()">${state.timerRunning ? 'Pause' : 'Resume'}</button>
+        <button class="btn small secondary" onclick="resetPracticeTimer()">Reset</button>
+      </div>
+    </div>` : '';
+
   app.innerHTML = `
     <span class="back-link" onclick="showCRPicker()">&larr; Back to scenarios</span>
+
+    <label class="check-row" style="margin:10px 0;">
+      <input type="checkbox" ${state.timerEnabled?'checked':''} onchange="togglePracticeTimer()">
+      <span>&#9201; Practice with an 18-minute timer &mdash; the real CR section gives 75 minutes for 4 items (about 18&ndash;19 min each), so this builds the same pacing and consistency for exam day</span>
+    </label>
+    ${timerBarHTML}
+    ${state.timeExpiredNote ? `<div class="toolbar-note" style="margin-bottom:10px;">${state.timeExpiredNote}</div>` : ''}
 
     <div class="cr-tabs">
       <div class="cr-tab ${state.crTab==='scenario'?'active':''}" onclick="switchCRTab('scenario')">Scenario &amp; Documents</div>
