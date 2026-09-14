@@ -353,6 +353,10 @@ const CATEGORIES = {
 // Audio study guides: short spoken-lecture overviews of each PSEL leadership category, grounded
 // in the official ETS SLLA 6990 content specification. Files live alongside index.html in the
 // deployed folder. A category with file:null simply hasn't had its audio produced yet.
+// Overview episode covering all six leadership categories at once, shown separately at the
+// top of the Audio Study Guides screen, above the per-category guides below.
+const AUDIO_OVERVIEW = { file: "audio/overview-six-categories.m4a", label: "Overview: The Six Leadership Categories" };
+
 const AUDIO_GUIDES = {
   SL: { file: "audio/strategic-leadership.m4a", label: "Strategic Leadership" },
   IL: { file: "audio/instructional-leadership.m4a", label: "Instructional Leadership" },
@@ -2692,6 +2696,15 @@ function showAudioGuides(){
 }
 
 function renderAudioGuides(){
+  const overviewHTML = AUDIO_OVERVIEW.file ? `
+    <div class="section-title">Start here</div>
+    <div class="cat-row" style="flex-direction:column; align-items:stretch; gap:10px; cursor:default; margin-bottom:20px;">
+      <strong>${AUDIO_OVERVIEW.label}</strong>
+      <audio controls preload="none" style="width:100%;" src="${AUDIO_OVERVIEW.file}">
+        Your browser doesn't support inline audio. You can still open ${AUDIO_OVERVIEW.file} directly.
+      </audio>
+    </div>` : '';
+
   const cards = Object.keys(AUDIO_GUIDES).map(k => {
     const guide = AUDIO_GUIDES[k];
     const qCount = QUESTIONS.filter(q=>q.cat===k).length;
@@ -2717,6 +2730,8 @@ function renderAudioGuides(){
   app.innerHTML = `
     <div class="section-title">Audio Study Guides</div>
     <p style="color:var(--muted, #666); margin:-4px 0 16px;">Short spoken overviews of each PSEL leadership category, grounded in the official ETS SLLA content specification. Good for review during a commute or workout &mdash; not a replacement for practicing questions.</p>
+    ${overviewHTML}
+    <div class="section-title">By category</div>
     <div class="cat-grid">
       ${cards}
     </div>
